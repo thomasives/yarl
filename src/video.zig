@@ -363,7 +363,7 @@ pub const Console = struct {
 
         result.cellScale = .{
             2.0 * @intToFloat(f32, cellSize[0]) / @intToFloat(f32, width),
-            -2.0 * @intToFloat(f32, cellSize[1]) / @intToFloat(f32, height),
+            2.0 * @intToFloat(f32, cellSize[1]) / @intToFloat(f32, height),
         };
 
         result.size = .{ width, height };
@@ -552,8 +552,6 @@ pub const ShaderError = error{
 /// Compile an link a shader program from the vertex and fragment sources.
 ///
 /// Returns an OpenGL program id.  It is the callers responsiblity to free the program with glDeleteProgram.
-///
-/// If the shaders fail to compile or link this function will panic with an error message describing the issue.
 fn createShader(vertex_source: [*:0]const u8, fragment_source: [*:0]const u8) ShaderError!c_uint {
     var vertex_shader: c_uint = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertex_shader, 1, &vertex_source, null);

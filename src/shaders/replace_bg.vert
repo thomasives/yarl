@@ -26,5 +26,5 @@ void main()
     v_BgColor = a_Color;
 
     vec2 Pos = a_CellOffset + c_Pos[gl_VertexID];
-    gl_Position = vec4(u_CellScale * (Pos + u_Offset) + vec2(-1.0, 1.0), 0.0f, 1.0f);
+    gl_Position = vec4(u_CellScale * (Pos + u_Offset) + vec2(-1.0, -1.0), 0.0f, 1.0f);
 }

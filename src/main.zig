@@ -64,6 +64,7 @@ pub fn main() anyerror!void {
     _ = glfwSetKeyCallback(window, keyCallback);
 
     const renderer = block: {
+        stbi_set_flip_vertically_on_load(1);
         var width: c_int = undefined;
         var height: c_int = undefined;
         const font_png = @embedFile("../assets/terminal8x8.png");
@@ -98,7 +99,7 @@ pub fn main() anyerror!void {
 
     glViewport(0, 0, window_data.width, window_data.height);
 
-    const console = try video.Console.init(.{ 10, 10 }, .{ 16, 16 });
+    const console = try video.Console.init(.{ 16, 16 }, .{ 40, 40 });
     defer console.deinit();
 
     var map: [256]video.CellGrid.Cell = undefined;
@@ -176,7 +177,7 @@ pub fn main() anyerror!void {
         glClear(GL_COLOR_BUFFER_BIT);
 
         renderer.clearConsole(console);
-        renderer.drawCells(console, .{ -4.0, -4.0 }, cells);
+        renderer.drawCells(console, .{ 0.0, 0.0 }, cells);
         renderer.replaceFg(console, .{ 0.0, 1.0 }, fg_replacements);
         renderer.replaceBg(console, .{ 0.0, 0.0 }, bg_replacements);
         renderer.blitConsole(console, .{ 64, 64 });

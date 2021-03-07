@@ -30,9 +30,9 @@ void main()
     v_FgColor = a_Color;
     vec2 Uv = c_Uv[gl_VertexID] + vec2(
             a_CodePoint & 0x0F, 
-            a_CodePoint >> 4);
+            15.0 - float(a_CodePoint >> 4));
     v_Uv = vec3((1.0 / 16.0) * Uv, float(a_FontId));
 
     vec2 Pos = a_CellOffset + c_Pos[gl_VertexID];
-    gl_Position = vec4(u_CellScale * (Pos + u_Offset) + vec2(-1.0, 1.0), a_Depth, 1.0f);
+    gl_Position = vec4(u_CellScale * (Pos + u_Offset) + vec2(-1.0, -1.0), a_Depth, 1.0f);
 }
