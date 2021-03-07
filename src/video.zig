@@ -30,7 +30,9 @@ pub const FontDescriptor = struct {
 
 pub const Renderer = struct {
     font_set: c_uint,
+    vao: c_uint,
     draw_cells: DrawCells,
+    blit_console: BlitConsole,
 
     pub fn init(fonts: FontSetDescriptor) ShaderError!Renderer {
         const draw_cells: DrawCells = block: {
@@ -45,26 +47,69 @@ pub const Renderer = struct {
             };
         };
 
+        const blit_console: BlitConsole = block: {
+            const vertex_source: [*:0]const u8 = @embedFile("shaders/blit.vert");
+            const fragment_source: [*:0]const u8 = @embedFile("shaders/blit_console.frag");
+            const program = try createShader(vertex_source, fragment_source);
+            break :block .{
+                .id = program,
+            };
+        };
+
+        // OpenGL requires us to bind a Vertex Array Object even if
+        // we don't actually need one for a simple blit.
+        var vao: c_uint = undefined;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        defer glBindVertexArray(0);
+
         const font_set = try loadFontSet(fonts);
 
         return Renderer{
             .font_set = font_set,
+            .vao = vao,
             .draw_cells = draw_cells,
+            .blit_console = blit_console,
         };
     }
 
-    pub fn drawCells(renderer: Renderer, offset: [2]f32, cellSize: [2]f32, screenSize: [2]f32, cells: CellGrid) void {
+    pub fn drawCells(renderer: Renderer, console: Console, offset: [2]f32, cells: CellGrid) void {
+        glBindFramebuffer(GL_FRAMEBUFFER, console.fbo);
+        glBindVertexArray(cells.vao);
         glUseProgram(renderer.draw_cells.id);
+
+        glViewport(0, 0, @intCast(c_int, console.size[0]), @intCast(c_int, console.size[1]));
+
+        glClearColor(1.0, 0.0, 1.0, 1.0);
+        glClear(GL_COLOR_BUFFER_BIT);
+
         glUniform2f(
             renderer.draw_cells.cell_size_loc,
-            2.0 * cellSize[0] / screenSize[0],
-            -2.0 * cellSize[1] / screenSize[1],
+            console.cellScale[0],
+            console.cellScale[1],
         );
         glUniform2f(renderer.draw_cells.offset_loc, offset[0], offset[0]);
         glUniform1i(renderer.draw_cells.stride_loc, cells.stride);
 
-        glBindVertexArray(cells.vao);
         glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, 256);
+    }
+
+    pub fn blitConsole(renderer: Renderer, console: Console, offset: [2]u32) void {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindVertexArray(renderer.vao);
+        glUseProgram(renderer.blit_console.id);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, console.texture);
+
+        glViewport(
+            @intCast(c_int, offset[0]),
+            @intCast(c_int, offset[1]),
+            @intCast(c_int, console.size[0]),
+            @intCast(c_int, console.size[1]),
+        );
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
     pub fn deinit(self: Renderer) void {
@@ -77,6 +122,10 @@ pub const Renderer = struct {
         cell_size_loc: c_int,
         stride_loc: c_int,
         offset_loc: c_int,
+    };
+
+    const BlitConsole = struct {
+        id: c_uint,
     };
 };
 
@@ -142,6 +191,67 @@ pub const CellGrid = struct {
     pub fn deinit(self: CellGrid) void {
         glDeleteVertexArrays(1, &self.vao);
         glDeleteBuffers(1, &self.vbo);
+    }
+};
+
+pub const Console = struct {
+    fbo: c_uint,
+    texture: c_uint,
+    size: [2]u32, // pixels
+    cellScale: [2]f32,
+
+    const Error = error{FramebufferIncomplete};
+
+    pub fn init(size: [2]u32, cellSize: [2]u32) Error!Console {
+        var result: Console = undefined;
+        glGenTextures(1, &result.texture);
+
+        glBindTexture(GL_TEXTURE_2D, result.texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+        const width = size[0] * cellSize[0];
+        const height = size[1] * cellSize[1];
+
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGB,
+            @intCast(c_int, width),
+            @intCast(c_int, height),
+            0,
+            GL_RGB,
+            GL_UNSIGNED_BYTE,
+            null,
+        );
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        glGenFramebuffers(1, &result.fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, result.fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.texture, 0);
+        const draw_buffers = [_]c_uint{GL_COLOR_ATTACHMENT0};
+        glDrawBuffers(1, &draw_buffers);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            return Error.FramebufferIncomplete;
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        result.cellScale = .{
+            2.0 * @intToFloat(f32, cellSize[0]) / @intToFloat(f32, width),
+            -2.0 * @intToFloat(f32, cellSize[1]) / @intToFloat(f32, height),
+        };
+
+        result.size = .{ width, height };
+
+        return result;
+    }
+
+    pub fn deinit(self: Console) void {
+        glDeleteFramebuffers(1, &self.fbo);
+        glDeleteTextures(1, &self.texture);
     }
 };
 
@@ -220,14 +330,6 @@ fn loadFontSet(desc: FontSetDescriptor) ShaderError!c_uint {
     glUseProgram(blit_font.id);
     defer glUseProgram(0);
     defer glDeleteProgram(blit_font.id);
-
-    // OpenGL requires us to bind a Vertex Array Object even if
-    // we don't actually need one for this simple blit.
-    var vao: c_uint = undefined;
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
-    defer glBindVertexArray(0);
-    defer glDeleteVertexArrays(1, &vao);
 
     var fbo: c_uint = undefined;
     glGenFramebuffers(1, &fbo);

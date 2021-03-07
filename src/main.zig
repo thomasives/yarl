@@ -98,6 +98,9 @@ pub fn main() anyerror!void {
 
     glViewport(0, 0, window_data.width, window_data.height);
 
+    const console = try video.Console.init(.{ 10, 10 }, .{ 16, 16 });
+    defer console.deinit();
+
     const Cell = video.CellGrid.Cell;
     var map: [256]Cell = undefined;
     for (map) |*tile, index| {
@@ -122,15 +125,12 @@ pub fn main() anyerror!void {
     defer data.deinit();
 
     while (glfwWindowShouldClose(window) == 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.2, 0.3, 0.3, 1.0);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        renderer.drawCells(
-            .{ 5.0, 5.0 },
-            .{ 16.0, 16.0 },
-            .{ @intToFloat(f32, window_data.width), @intToFloat(f32, window_data.height) },
-            data,
-        );
+        renderer.drawCells(console, .{ 5.0, 5.0 }, data);
+        renderer.blitConsole(console, .{ 64, 64 });
 
         glfwSwapBuffers(window);
         glfwPollEvents();

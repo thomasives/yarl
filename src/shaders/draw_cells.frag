@@ -5,9 +5,9 @@ in vec3 v_Uv;
 
 uniform sampler2DArray u_Font;
 
-out vec4 o_Color;
+layout (location = 0) out vec3 o_Color;
 
 void main()
 {
-    o_Color = vec4(mix(v_BgColor, v_FgColor, texture(u_Font, v_Uv).r), 1.0);
+    o_Color = mix(v_BgColor, v_FgColor, texture(u_Font, v_Uv).r);
 }
