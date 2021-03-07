@@ -163,7 +163,7 @@ pub fn main() anyerror!void {
         g.* = .{
             .x = 2 + @intCast(u16, index),
             .y = 0,
-            .color = video.rgb(0, 0, 0),
+            .color = video.rgb(0, 255, 255),
         };
     }
 
@@ -177,7 +177,7 @@ pub fn main() anyerror!void {
 
         renderer.clearConsole(console);
         renderer.drawCells(console, .{ -4.0, -4.0 }, cells);
-        renderer.replaceFg(console, .{ 0.0, 0.0 }, fg_replacements);
+        renderer.replaceFg(console, .{ 0.0, 1.0 }, fg_replacements);
         renderer.replaceBg(console, .{ 0.0, 0.0 }, bg_replacements);
         renderer.blitConsole(console, .{ 64, 64 });
 

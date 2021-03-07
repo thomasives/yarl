@@ -54,11 +54,6 @@ pub const Renderer = struct {
             const fragment_source: [*:0]const u8 = @embedFile("shaders/replace_fg.frag");
             const program = try createShader(vertex_source, fragment_source);
 
-            const bg_color_loc = glGetUniformLocation(program, "u_BgColor");
-            glUseProgram(program);
-            glUniform1i(bg_color_loc, 1);
-            glUseProgram(0);
-
             break :block .{
                 .id = program,
                 .cell_size_loc = glGetUniformLocation(program, "u_CellScale"),
@@ -82,6 +77,12 @@ pub const Renderer = struct {
             const vertex_source: [*:0]const u8 = @embedFile("shaders/blit.vert");
             const fragment_source: [*:0]const u8 = @embedFile("shaders/blit_console.frag");
             const program = try createShader(vertex_source, fragment_source);
+
+            const bg_color_loc = glGetUniformLocation(program, "u_BgColor");
+            glUseProgram(program);
+            glUniform1i(bg_color_loc, 1);
+            glUseProgram(0);
+
             break :block .{
                 .id = program,
             };
@@ -145,7 +146,10 @@ pub const Renderer = struct {
         glUseProgram(renderer.blit_console.id);
 
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, console.texture);
+        glBindTexture(GL_TEXTURE_2D, console.fg_texture);
+
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, console.bg_texture);
 
         glViewport(
             @intCast(c_int, offset[0]),
@@ -166,8 +170,6 @@ pub const Renderer = struct {
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D_ARRAY, renderer.font_set);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, console.bg_texture);
 
         glUniform2f(
             renderer.replace_fg.cell_size_loc,
@@ -187,9 +189,6 @@ pub const Renderer = struct {
         glUseProgram(renderer.replace_bg.id);
 
         glViewport(0, 0, @intCast(c_int, console.size[0]), @intCast(c_int, console.size[1]));
-
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, console.fg_texture);
 
         glUniform2f(
             renderer.replace_bg.cell_size_loc,
@@ -247,7 +246,6 @@ pub const Console = struct {
     draw_cells_fbo: c_uint,
     replace_fg_fbo: c_uint,
     replace_bg_fbo: c_uint,
-    texture: c_uint,
     bg_texture: c_uint,
     fg_texture: c_uint,
     depth_buffer: c_uint,
@@ -261,29 +259,6 @@ pub const Console = struct {
 
         const width = size[0] * cellSize[0];
         const height = size[1] * cellSize[1];
-
-        {
-            glGenTextures(1, &result.texture);
-
-            glBindTexture(GL_TEXTURE_2D, result.texture);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-            glTexImage2D(
-                GL_TEXTURE_2D,
-                0,
-                GL_RGB,
-                @intCast(c_int, width),
-                @intCast(c_int, height),
-                0,
-                GL_RGB,
-                GL_UNSIGNED_BYTE,
-                null,
-            );
-            glBindTexture(GL_TEXTURE_2D, 0);
-        }
 
         {
             glGenTextures(1, &result.bg_texture);
@@ -347,23 +322,7 @@ pub const Console = struct {
         {
             glGenFramebuffers(1, &result.draw_cells_fbo);
             glBindFramebuffer(GL_FRAMEBUFFER, result.draw_cells_fbo);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.texture, 0);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, result.bg_texture, 0);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, result.fg_texture, 0);
-            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, result.depth_buffer);
-            const draw_buffers = [_]c_uint{ GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
-            glDrawBuffers(3, &draw_buffers);
-
-            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-                return Error.FramebufferIncomplete;
-
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        }
-
-        {
-            glGenFramebuffers(1, &result.replace_fg_fbo);
-            glBindFramebuffer(GL_FRAMEBUFFER, result.replace_fg_fbo);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.texture, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.bg_texture, 0);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, result.fg_texture, 0);
             glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, result.depth_buffer);
             const draw_buffers = [_]c_uint{ GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
@@ -376,12 +335,25 @@ pub const Console = struct {
         }
 
         {
+            glGenFramebuffers(1, &result.replace_fg_fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, result.replace_fg_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.fg_texture, 0);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, result.depth_buffer);
+            const draw_buffers = [_]c_uint{GL_COLOR_ATTACHMENT0};
+            glDrawBuffers(1, &draw_buffers);
+
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                return Error.FramebufferIncomplete;
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+
+        {
             glGenFramebuffers(1, &result.replace_bg_fbo);
             glBindFramebuffer(GL_FRAMEBUFFER, result.replace_bg_fbo);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.texture, 0);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, result.bg_texture, 0);
-            const draw_buffers = [_]c_uint{ GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-            glDrawBuffers(2, &draw_buffers);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.bg_texture, 0);
+            const draw_buffers = [_]c_uint{GL_COLOR_ATTACHMENT0};
+            glDrawBuffers(1, &draw_buffers);
 
             if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
                 return Error.FramebufferIncomplete;
@@ -403,7 +375,6 @@ pub const Console = struct {
         glDeleteFramebuffers(1, &self.draw_cells_fbo);
         glDeleteFramebuffers(1, &self.replace_fg_fbo);
         glDeleteFramebuffers(1, &self.replace_bg_fbo);
-        glDeleteTextures(1, &self.texture);
         glDeleteTextures(1, &self.bg_texture);
         glDeleteTextures(1, &self.fg_texture);
     }
