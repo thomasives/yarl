@@ -33,6 +33,7 @@ pub const Renderer = struct {
     vao: c_uint,
     draw_cells: DrawCells,
     blit_console: BlitConsole,
+    replace_fg: ReplaceFg,
 
     pub fn init(fonts: FontSetDescriptor) ShaderError!Renderer {
         const draw_cells: DrawCells = block: {
@@ -43,6 +44,23 @@ pub const Renderer = struct {
                 .id = program,
                 .cell_size_loc = glGetUniformLocation(program, "u_CellScale"),
                 .stride_loc = glGetUniformLocation(program, "u_Stride"),
+                .offset_loc = glGetUniformLocation(program, "u_Offset"),
+            };
+        };
+
+        const replace_fg: ReplaceFg = block: {
+            const vertex_source: [*:0]const u8 = @embedFile("shaders/replace_fg.vert");
+            const fragment_source: [*:0]const u8 = @embedFile("shaders/replace_fg.frag");
+            const program = try createShader(vertex_source, fragment_source);
+
+            const bg_color_loc = glGetUniformLocation(program, "u_BgColor");
+            glUseProgram(program);
+            glUniform1i(bg_color_loc, 1);
+            glUseProgram(0);
+
+            break :block .{
+                .id = program,
+                .cell_size_loc = glGetUniformLocation(program, "u_CellScale"),
                 .offset_loc = glGetUniformLocation(program, "u_Offset"),
             };
         };
@@ -65,33 +83,43 @@ pub const Renderer = struct {
 
         const font_set = try loadFontSet(fonts);
 
+        glDepthFunc(GL_GEQUAL);
+
         return Renderer{
             .font_set = font_set,
             .vao = vao,
             .draw_cells = draw_cells,
             .blit_console = blit_console,
+            .replace_fg = replace_fg,
         };
     }
 
+    pub fn clearConsole(renderer: Renderer, console: Console) void {
+        glBindFramebuffer(GL_FRAMEBUFFER, console.draw_cells_fbo);
+        glClearColor(1.0, 0.0, 1.0, 1.0);
+        glClearDepth(0.0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
     pub fn drawCells(renderer: Renderer, console: Console, offset: [2]f32, cells: CellGrid) void {
-        glBindFramebuffer(GL_FRAMEBUFFER, console.fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, console.draw_cells_fbo);
         glBindVertexArray(cells.vao);
         glUseProgram(renderer.draw_cells.id);
 
         glViewport(0, 0, @intCast(c_int, console.size[0]), @intCast(c_int, console.size[1]));
-
-        glClearColor(1.0, 0.0, 1.0, 1.0);
-        glClear(GL_COLOR_BUFFER_BIT);
 
         glUniform2f(
             renderer.draw_cells.cell_size_loc,
             console.cellScale[0],
             console.cellScale[1],
         );
-        glUniform2f(renderer.draw_cells.offset_loc, offset[0], offset[0]);
+        glUniform2f(renderer.draw_cells.offset_loc, offset[0], offset[1]);
         glUniform1i(renderer.draw_cells.stride_loc, cells.stride);
 
-        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, 256);
+        glDisable(GL_DEPTH_TEST);
+
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, cells.len);
     }
 
     pub fn blitConsole(renderer: Renderer, console: Console, offset: [2]u32) void {
@@ -112,6 +140,28 @@ pub const Renderer = struct {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
+    pub fn replaceFg(renderer: Renderer, console: Console, offset: [2]f32, replacements: FgReplacements) void {
+        glBindFramebuffer(GL_FRAMEBUFFER, console.replace_fg_fbo);
+        glBindVertexArray(replacements.vao);
+        glUseProgram(renderer.replace_fg.id);
+
+        glViewport(0, 0, @intCast(c_int, console.size[0]), @intCast(c_int, console.size[1]));
+
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, console.bg_texture);
+
+        glUniform2f(
+            renderer.replace_fg.cell_size_loc,
+            console.cellScale[0],
+            console.cellScale[1],
+        );
+        glUniform2f(renderer.replace_fg.offset_loc, offset[0], offset[1]);
+
+        glEnable(GL_DEPTH_TEST);
+
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, replacements.len);
+    }
+
     pub fn deinit(self: Renderer) void {
         glDeleteTextures(1, &self.font_set);
         glDeleteProgram(self.draw_cells.id);
@@ -127,6 +177,12 @@ pub const Renderer = struct {
     const BlitConsole = struct {
         id: c_uint,
     };
+
+    const ReplaceFg = struct {
+        id: c_uint,
+        cell_size_loc: c_int,
+        offset_loc: c_int,
+    };
 };
 
 pub const Rgb = struct {
@@ -139,6 +195,130 @@ pub inline fn rgb(red: u8, green: u8, blue: u8) Rgb {
     return Rgb{ .red = red, .green = green, .blue = blue };
 }
 
+/// Console is a render target
+pub const Console = struct {
+    draw_cells_fbo: c_uint,
+    replace_fg_fbo: c_uint,
+    texture: c_uint,
+    bg_texture: c_uint,
+    depth_buffer: c_uint,
+    size: [2]u32, // pixels
+    cellScale: [2]f32,
+
+    const Error = error{FramebufferIncomplete};
+
+    pub fn init(size: [2]u32, cellSize: [2]u32) Error!Console {
+        var result: Console = undefined;
+
+        const width = size[0] * cellSize[0];
+        const height = size[1] * cellSize[1];
+
+        {
+            glGenTextures(1, &result.texture);
+
+            glBindTexture(GL_TEXTURE_2D, result.texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGB,
+                @intCast(c_int, width),
+                @intCast(c_int, height),
+                0,
+                GL_RGB,
+                GL_UNSIGNED_BYTE,
+                null,
+            );
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+
+        {
+            glGenTextures(1, &result.bg_texture);
+
+            glBindTexture(GL_TEXTURE_2D, result.bg_texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGB,
+                @intCast(c_int, width),
+                @intCast(c_int, height),
+                0,
+                GL_RGB,
+                GL_UNSIGNED_BYTE,
+                null,
+            );
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+
+        {
+            glGenRenderbuffers(1, &result.depth_buffer);
+
+            glBindRenderbuffer(GL_RENDERBUFFER, result.depth_buffer);
+            glRenderbufferStorage(
+                GL_RENDERBUFFER,
+                GL_DEPTH_COMPONENT,
+                @intCast(c_int, width),
+                @intCast(c_int, height),
+            );
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        }
+
+        {
+            glGenFramebuffers(1, &result.draw_cells_fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, result.draw_cells_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.texture, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, result.bg_texture, 0);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, result.depth_buffer);
+            const draw_buffers = [_]c_uint{ GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+            glDrawBuffers(2, &draw_buffers);
+
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                return Error.FramebufferIncomplete;
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+
+        {
+            glGenFramebuffers(1, &result.replace_fg_fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, result.replace_fg_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.texture, 0);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, result.depth_buffer);
+            const draw_buffers = [_]c_uint{GL_COLOR_ATTACHMENT0};
+            glDrawBuffers(1, &draw_buffers);
+
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                return Error.FramebufferIncomplete;
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+
+        result.cellScale = .{
+            2.0 * @intToFloat(f32, cellSize[0]) / @intToFloat(f32, width),
+            -2.0 * @intToFloat(f32, cellSize[1]) / @intToFloat(f32, height),
+        };
+
+        result.size = .{ width, height };
+
+        return result;
+    }
+
+    pub fn deinit(self: Console) void {
+        glDeleteFramebuffers(1, &self.draw_cells_fbo);
+        glDeleteFramebuffers(1, &self.replace_fg_fbo);
+        glDeleteTextures(1, &self.texture);
+        glDeleteTextures(1, &self.bg_texture);
+    }
+};
+
 /// An array of cells stored on the GPU
 pub const CellGrid = struct {
     pub const Cell = struct {
@@ -150,7 +330,8 @@ pub const CellGrid = struct {
 
     vao: c_uint,
     vbo: c_uint,
-    stride: i32,
+    stride: c_int,
+    len: c_int,
 
     pub fn init(cells: []const Cell, stride: i32) CellGrid {
         var result: CellGrid = undefined;
@@ -184,6 +365,7 @@ pub const CellGrid = struct {
         glEnableVertexAttribArray(3);
 
         result.stride = stride;
+        result.len = @intCast(c_int, cells.len);
 
         return result;
     }
@@ -194,64 +376,65 @@ pub const CellGrid = struct {
     }
 };
 
-pub const Console = struct {
-    fbo: c_uint,
-    texture: c_uint,
-    size: [2]u32, // pixels
-    cellScale: [2]f32,
+/// Foreground replacement data stored on the GPU
+pub const FgReplacements = struct {
+    pub const Cell = struct {
+        x: u16,
+        y: u16,
+        z: u8,
+        color: Rgb,
+        code_point: u8,
+        font_id: u8,
+    };
 
-    const Error = error{FramebufferIncomplete};
+    vao: c_uint,
+    vbo: c_uint,
+    len: c_int,
 
-    pub fn init(size: [2]u32, cellSize: [2]u32) Error!Console {
-        var result: Console = undefined;
-        glGenTextures(1, &result.texture);
+    pub fn init(cells: []const Cell) FgReplacements {
+        var result: FgReplacements = undefined;
 
-        glBindTexture(GL_TEXTURE_2D, result.texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glGenVertexArrays(1, &result.vao);
+        glBindVertexArray(result.vao);
 
-        const width = size[0] * cellSize[0];
-        const height = size[1] * cellSize[1];
+        glGenBuffers(1, &result.vbo);
 
-        glTexImage2D(
-            GL_TEXTURE_2D,
-            0,
-            GL_RGB,
-            @intCast(c_int, width),
-            @intCast(c_int, height),
-            0,
-            GL_RGB,
-            GL_UNSIGNED_BYTE,
-            null,
-        );
-        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindBuffer(GL_ARRAY_BUFFER, result.vbo);
+        glBufferData(GL_ARRAY_BUFFER, @intCast(c_long, cells.len * @sizeOf(Cell)), cells.ptr, GL_STATIC_DRAW);
 
-        glGenFramebuffers(1, &result.fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, result.fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.texture, 0);
-        const draw_buffers = [_]c_uint{GL_COLOR_ATTACHMENT0};
-        glDrawBuffers(1, &draw_buffers);
+        var offset: ?*c_void = null;
+        glVertexAttribPointer(0, 2, GL_UNSIGNED_SHORT, GL_FALSE, @sizeOf(Cell), offset);
+        glVertexAttribDivisor(0, 1);
+        glEnableVertexAttribArray(0);
 
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-            return Error.FramebufferIncomplete;
+        offset = @intToPtr(*c_void, @byteOffsetOf(Cell, "z"));
+        glVertexAttribPointer(1, 1, GL_UNSIGNED_BYTE, GL_TRUE, @sizeOf(Cell), offset);
+        glVertexAttribDivisor(1, 1);
+        glEnableVertexAttribArray(1);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        offset = @intToPtr(*c_void, @byteOffsetOf(Cell, "color"));
+        glVertexAttribPointer(2, 3, GL_UNSIGNED_BYTE, GL_TRUE, @sizeOf(Cell), offset);
+        glVertexAttribDivisor(2, 1);
+        glEnableVertexAttribArray(2);
 
-        result.cellScale = .{
-            2.0 * @intToFloat(f32, cellSize[0]) / @intToFloat(f32, width),
-            -2.0 * @intToFloat(f32, cellSize[1]) / @intToFloat(f32, height),
-        };
+        offset = @intToPtr(*c_void, @byteOffsetOf(Cell, "code_point"));
+        glVertexAttribIPointer(3, 1, GL_UNSIGNED_BYTE, @sizeOf(Cell), offset);
+        glVertexAttribDivisor(3, 1);
+        glEnableVertexAttribArray(3);
 
-        result.size = .{ width, height };
+        offset = @intToPtr(*c_void, @byteOffsetOf(Cell, "font_id"));
+        glVertexAttribIPointer(4, 1, GL_UNSIGNED_BYTE, @sizeOf(Cell), offset);
+        glVertexAttribDivisor(4, 1);
+        glEnableVertexAttribArray(4);
+
+        result.len = @intCast(c_int, cells.len);
 
         return result;
     }
 
-    pub fn deinit(self: Console) void {
-        glDeleteFramebuffers(1, &self.fbo);
-        glDeleteTextures(1, &self.texture);
+    pub fn deinit(self: FgReplacements) void {
+        glDeleteVertexArrays(1, &self.vao);
+        glDeleteBuffers(1, &self.vbo);
     }
 };
 

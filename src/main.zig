@@ -101,18 +101,17 @@ pub fn main() anyerror!void {
     const console = try video.Console.init(.{ 10, 10 }, .{ 16, 16 });
     defer console.deinit();
 
-    const Cell = video.CellGrid.Cell;
-    var map: [256]Cell = undefined;
+    var map: [256]video.CellGrid.Cell = undefined;
     for (map) |*tile, index| {
         if (((index % 16) + (index / 16)) % 2 == 0) {
-            tile.* = Cell{
+            tile.* = video.CellGrid.Cell{
                 .bg = video.rgb(51, 77, 77),
                 .fg = video.rgb(255, 128, 51),
                 .code_point = @intCast(u8, index),
                 .font_id = 0,
             };
         } else {
-            tile.* = Cell{
+            tile.* = video.CellGrid.Cell{
                 .bg = video.rgb(255, 128, 51),
                 .fg = video.rgb(51, 77, 77),
                 .code_point = @intCast(u8, index),
@@ -121,15 +120,52 @@ pub fn main() anyerror!void {
         }
     }
 
-    var data = video.CellGrid.init(&map, 16);
-    defer data.deinit();
+    var cells = video.CellGrid.init(&map, 16);
+    defer cells.deinit();
+
+    var monsters: [6]video.FgReplacements.Cell = undefined;
+    for (monsters) |*mon, index| {
+        if (index == 4) {
+            mon.* = video.FgReplacements.Cell{
+                .x = 0,
+                .y = 0,
+                .z = 1,
+                .color = video.rgb(255, 0, 255),
+                .code_point = 0x50,
+                .font_id = 0,
+            };
+        } else if (index == 5) {
+            mon.* = video.FgReplacements.Cell{
+                .x = 1,
+                .y = 0,
+                .z = 0,
+                .color = video.rgb(255, 0, 255),
+                .code_point = 0x50,
+                .font_id = 0,
+            };
+        } else {
+            mon.* = video.FgReplacements.Cell{
+                .x = @intCast(u16, index),
+                .y = 0,
+                .z = 1,
+                .color = video.rgb(255, 0, 255),
+                .code_point = 0x40,
+                .font_id = 0,
+            };
+        }
+    }
+
+    var fg_replacements = video.FgReplacements.init(&monsters);
+    defer fg_replacements.deinit();
 
     while (glfwWindowShouldClose(window) == 0) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.2, 0.3, 0.3, 1.0);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        renderer.drawCells(console, .{ 5.0, 5.0 }, data);
+        renderer.clearConsole(console);
+        renderer.drawCells(console, .{ -4.0, -4.0 }, cells);
+        renderer.replaceFg(console, .{ 0.0, 0.0 }, fg_replacements);
         renderer.blitConsole(console, .{ 64, 64 });
 
         glfwSwapBuffers(window);
