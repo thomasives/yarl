@@ -158,6 +158,18 @@ pub fn main() anyerror!void {
     var fg_replacements = video.FgReplacements.init(&monsters);
     defer fg_replacements.deinit();
 
+    var gas: [4]video.BgReplacements.Cell = undefined;
+    for (gas) |*g, index| {
+        g.* = .{
+            .x = 2 + @intCast(u16, index),
+            .y = 0,
+            .color = video.rgb(0, 0, 0),
+        };
+    }
+
+    var bg_replacements = video.BgReplacements.init(&gas);
+    defer bg_replacements.deinit();
+
     while (glfwWindowShouldClose(window) == 0) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.2, 0.3, 0.3, 1.0);
@@ -166,6 +178,7 @@ pub fn main() anyerror!void {
         renderer.clearConsole(console);
         renderer.drawCells(console, .{ -4.0, -4.0 }, cells);
         renderer.replaceFg(console, .{ 0.0, 0.0 }, fg_replacements);
+        renderer.replaceBg(console, .{ 0.0, 0.0 }, bg_replacements);
         renderer.blitConsole(console, .{ 64, 64 });
 
         glfwSwapBuffers(window);
