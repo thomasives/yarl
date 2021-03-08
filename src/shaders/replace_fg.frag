@@ -4,7 +4,7 @@ in vec3 v_Uv;
 
 uniform sampler2DArray u_Font;
 
-layout (location = 0) out vec4 o_FgColor;
+layout (location = 1) out vec4 o_FgColor;
 
 void main()
 {
