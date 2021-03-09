@@ -28,6 +28,12 @@ pub const FontDescriptor = struct {
     data: [*c]u8,
 };
 
+const Usage = enum(c_uint) {
+    static = GL_STATIC_DRAW,
+    stream = GL_STREAM_DRAW,
+    dynamic = GL_DYNAMIC_DRAW,
+};
+
 pub const Renderer = struct {
     font_set: c_uint,
     vao: c_uint,
@@ -126,11 +132,11 @@ pub const Renderer = struct {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D_ARRAY, renderer.font_set);
 
-        glUniform1i(renderer.draw_cells.stride_loc, cells.stride);
+        glUniform1i(renderer.draw_cells.stride_loc, @intCast(c_int, cells.stride));
 
         glDisable(GL_DEPTH_TEST);
 
-        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, cells.len);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, @intCast(c_int, cells.len));
     }
 
     pub fn replaceFg(renderer: Renderer, replacements: FgReplacements) void {
@@ -142,7 +148,7 @@ pub const Renderer = struct {
 
         glEnable(GL_DEPTH_TEST);
 
-        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, replacements.len);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, @intCast(c_int, replacements.len));
     }
 
     pub fn replaceBg(renderer: Renderer, replacements: BgReplacements) void {
@@ -151,7 +157,7 @@ pub const Renderer = struct {
 
         glDisable(GL_DEPTH_TEST);
 
-        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, replacements.len);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, @intCast(c_int, replacements.len));
     }
 
     pub fn blitConsole(renderer: Renderer, console: Console, offset: [2]u32) void {
@@ -226,14 +232,14 @@ pub const Console = struct {
         offset: [2]f32, // cells
     };
 
-    pub fn init(width: u32, height: u32) Error!Console {
+    pub fn init(width: u32, height: u32, usage: Usage) Error!Console {
         var result: Console = undefined;
 
         {
             glGenBuffers(1, &result.ubo);
 
             glBindBuffer(GL_UNIFORM_BUFFER, result.ubo);
-            glBufferData(GL_UNIFORM_BUFFER, @sizeOf(Transform), null, GL_DYNAMIC_DRAW);
+            glBufferData(GL_UNIFORM_BUFFER, @sizeOf(Transform), null, @enumToInt(usage));
             glBindBuffer(GL_UNIFORM_BUFFER, 0);
         }
 
@@ -357,19 +363,22 @@ pub const CellGrid = struct {
 
     vao: c_uint,
     vbo: c_uint,
-    stride: c_int,
-    len: c_int,
+    capacity: usize,
+    stride: usize,
+    len: usize,
 
-    pub fn init(cells: []const Cell, stride: i32) CellGrid {
+    pub fn init(capacity: usize, usage: Usage) CellGrid {
         var result: CellGrid = undefined;
 
         glGenVertexArrays(1, &result.vao);
         glBindVertexArray(result.vao);
+        defer glBindVertexArray(0);
 
         glGenBuffers(1, &result.vbo);
-
         glBindBuffer(GL_ARRAY_BUFFER, result.vbo);
-        glBufferData(GL_ARRAY_BUFFER, @intCast(c_long, cells.len * @sizeOf(Cell)), cells.ptr, GL_STATIC_DRAW);
+        defer glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glBufferData(GL_ARRAY_BUFFER, @intCast(c_long, capacity * @sizeOf(Cell)), null, @enumToInt(usage));
 
         var offset: ?*c_void = null;
         glVertexAttribPointer(0, 3, GL_UNSIGNED_BYTE, GL_TRUE, @sizeOf(Cell), offset);
@@ -391,10 +400,22 @@ pub const CellGrid = struct {
         glVertexAttribDivisor(3, 1);
         glEnableVertexAttribArray(3);
 
-        result.stride = stride;
-        result.len = @intCast(c_int, cells.len);
+        result.stride = 0;
+        result.len = 0;
+        result.capacity = capacity;
 
         return result;
+    }
+
+    pub fn sendData(self: *CellGrid, cells: []const Cell, stride: usize) void {
+        std.debug.assert(cells.len <= self.capacity);
+
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo);
+        defer glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, @intCast(c_long, cells.len * @sizeOf(Cell)), cells.ptr);
+
+        self.len = cells.len;
+        self.stride = stride;
     }
 
     pub fn deinit(self: CellGrid) void {
@@ -416,18 +437,21 @@ pub const FgReplacements = struct {
 
     vao: c_uint,
     vbo: c_uint,
-    len: c_int,
+    capacity: usize,
+    len: usize,
 
-    pub fn init(cells: []const Cell) FgReplacements {
+    pub fn init(capacity: usize, usage: Usage) FgReplacements {
         var result: FgReplacements = undefined;
 
         glGenVertexArrays(1, &result.vao);
         glBindVertexArray(result.vao);
+        defer glBindVertexArray(0);
 
         glGenBuffers(1, &result.vbo);
-
         glBindBuffer(GL_ARRAY_BUFFER, result.vbo);
-        glBufferData(GL_ARRAY_BUFFER, @intCast(c_long, cells.len * @sizeOf(Cell)), cells.ptr, GL_STATIC_DRAW);
+        defer glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glBufferData(GL_ARRAY_BUFFER, @intCast(c_long, capacity * @sizeOf(Cell)), null, @enumToInt(usage));
 
         var offset: ?*c_void = null;
         glVertexAttribPointer(0, 2, GL_UNSIGNED_SHORT, GL_FALSE, @sizeOf(Cell), offset);
@@ -454,9 +478,20 @@ pub const FgReplacements = struct {
         glVertexAttribDivisor(4, 1);
         glEnableVertexAttribArray(4);
 
-        result.len = @intCast(c_int, cells.len);
+        result.capacity = capacity;
+        result.len = 0;
 
         return result;
+    }
+
+    pub fn sendData(self: *FgReplacements, cells: []const Cell) void {
+        std.debug.assert(cells.len <= self.capacity);
+
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo);
+        defer glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, @intCast(c_long, cells.len * @sizeOf(Cell)), cells.ptr);
+
+        self.len = cells.len;
     }
 
     pub fn deinit(self: FgReplacements) void {
@@ -475,18 +510,21 @@ pub const BgReplacements = struct {
 
     vao: c_uint,
     vbo: c_uint,
-    len: c_int,
+    capacity: usize,
+    len: usize,
 
-    pub fn init(cells: []const Cell) BgReplacements {
+    pub fn init(capacity: usize, usage: Usage) BgReplacements {
         var result: BgReplacements = undefined;
 
         glGenVertexArrays(1, &result.vao);
         glBindVertexArray(result.vao);
+        defer glBindVertexArray(0);
 
         glGenBuffers(1, &result.vbo);
-
         glBindBuffer(GL_ARRAY_BUFFER, result.vbo);
-        glBufferData(GL_ARRAY_BUFFER, @intCast(c_long, cells.len * @sizeOf(Cell)), cells.ptr, GL_STATIC_DRAW);
+        defer glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glBufferData(GL_ARRAY_BUFFER, @intCast(c_long, capacity * @sizeOf(Cell)), null, @enumToInt(usage));
 
         var offset: ?*c_void = null;
         glVertexAttribPointer(0, 2, GL_UNSIGNED_SHORT, GL_FALSE, @sizeOf(Cell), offset);
@@ -498,9 +536,20 @@ pub const BgReplacements = struct {
         glVertexAttribDivisor(1, 1);
         glEnableVertexAttribArray(1);
 
-        result.len = @intCast(c_int, cells.len);
+        result.capacity = capacity;
+        result.len = 0;
 
         return result;
+    }
+
+    pub fn sendData(self: *BgReplacements, cells: []const Cell) void {
+        std.debug.assert(cells.len <= self.capacity);
+
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo);
+        defer glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, @intCast(c_long, cells.len * @sizeOf(Cell)), cells.ptr);
+
+        self.len = cells.len;
     }
 
     pub fn deinit(self: BgReplacements) void {

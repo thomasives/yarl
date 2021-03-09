@@ -99,9 +99,8 @@ pub fn main() anyerror!void {
 
     glViewport(0, 0, window_data.width, window_data.height);
 
-    const console = try video.Console.init(500, 500);
+    const console = try video.Console.init(500, 500, .static);
     defer console.deinit();
-
     console.sendTransform(.{ .cell_size = .{ 16, 16 }, .offset = .{ 5, 5 } });
 
     var map: [256]video.CellGrid.Cell = undefined;
@@ -123,8 +122,9 @@ pub fn main() anyerror!void {
         }
     }
 
-    var cells = video.CellGrid.init(&map, 16);
+    var cells = video.CellGrid.init(256, .static);
     defer cells.deinit();
+    cells.sendData(&map, 16);
 
     var monsters: [6]video.FgReplacements.Cell = undefined;
     for (monsters) |*mon, index| {
@@ -158,8 +158,10 @@ pub fn main() anyerror!void {
         }
     }
 
-    var fg_replacements = video.FgReplacements.init(&monsters);
+    var fg_replacements = video.FgReplacements.init(6, .static);
     defer fg_replacements.deinit();
+
+    fg_replacements.sendData(&monsters);
 
     var gas: [4]video.BgReplacements.Cell = undefined;
     for (gas) |*g, index| {
@@ -170,8 +172,10 @@ pub fn main() anyerror!void {
         };
     }
 
-    var bg_replacements = video.BgReplacements.init(&gas);
+    var bg_replacements = video.BgReplacements.init(4, .static);
     defer bg_replacements.deinit();
+
+    bg_replacements.sendData(&gas);
 
     while (glfwWindowShouldClose(window) == 0) {
         renderer.clear(video.rgb(51, 77, 77));
@@ -222,6 +226,48 @@ fn errorCallback(code: c_int, message: [*c]const u8) callconv(.C) void {
 }
 
 fn glDebugOutput(
+    source: c_uint,
+    ty: c_uint,
+    id: c_uint,
+    severity: c_uint,
+    length: c_int,
+    message: [*c]const u8,
+    user: ?*const c_void,
+) callconv(.C) void {
+    if (id == 131169 or id == 131185 or id == 131218 or id == 131204) return;
+
+    const out = std.io.getStdErr().writer();
+    _ = switch (ty) {
+        GL_DEBUG_TYPE_ERROR_ARB => out.write("[ERROR::"),
+        GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR_ARB => out.write("[DEPRECATED::"),
+        GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR_ARB => out.write("[UNDEFINED::"),
+        GL_DEBUG_TYPE_PORTABILITY_ARB => out.write("[PORTABILITY::"),
+        GL_DEBUG_TYPE_PERFORMANCE_ARB => out.write("[PERFORMANCE::"),
+        GL_DEBUG_TYPE_OTHER_ARB => out.write("[OTHER::"),
+        else => out.write("[UNKNOWN::"),
+    } catch unreachable;
+
+    _ = switch (source) {
+        GL_DEBUG_SOURCE_API_ARB => out.write("API::"),
+        GL_DEBUG_SOURCE_WINDOW_SYSTEM_ARB => out.write("WINDOW::"),
+        GL_DEBUG_SOURCE_SHADER_COMPILER_ARB => out.write("COMPILER::"),
+        GL_DEBUG_SOURCE_THIRD_PARTY_ARB => out.write("THIRDPARTY::"),
+        GL_DEBUG_SOURCE_APPLICATION_ARB => out.write("APPLICATION::"),
+        GL_DEBUG_SOURCE_OTHER_ARB => out.write("OTHER::"),
+        else => out.write("UNKNOWN::"),
+    } catch unreachable;
+
+    _ = switch (severity) {
+        GL_DEBUG_SEVERITY_HIGH_ARB => out.write("HIGH] "),
+        GL_DEBUG_SEVERITY_MEDIUM_ARB => out.write("MEDIUM] "),
+        GL_DEBUG_SEVERITY_LOW_ARB => out.write("LOW] "),
+        else => out.write("UNKNOWN] "),
+    } catch unreachable;
+
+    _ = out.print("({}) {s}\n", .{ id, message }) catch unreachable;
+}
+
+fn debugOutput(
     source: c_uint,
     ty: c_uint,
     id: c_uint,
