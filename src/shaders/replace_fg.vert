@@ -5,8 +5,10 @@ layout (location = 2) in vec3 a_Color;
 layout (location = 3) in int a_CodePoint;
 layout (location = 4) in int a_FontId;
 
-uniform vec2 u_CellScale;
-uniform vec2 u_Offset;
+layout (std140) uniform Console {
+    vec2 u_CellScale;
+    vec2 u_Offset;
+};
 
 const vec2 c_Pos[4] = vec2[4](
     vec2(0.0f, 0.0f),

@@ -99,8 +99,10 @@ pub fn main() anyerror!void {
 
     glViewport(0, 0, window_data.width, window_data.height);
 
-    const console = try video.Console.init(.{ 16, 16 }, .{ 40, 40 });
+    const console = try video.Console.init(500, 500);
     defer console.deinit();
+
+    console.sendTransform(.{ .cell_size = .{ 16, 16 }, .offset = .{ 5, 5 } });
 
     var map: [256]video.CellGrid.Cell = undefined;
     for (map) |*tile, index| {
@@ -172,14 +174,18 @@ pub fn main() anyerror!void {
     defer bg_replacements.deinit();
 
     while (glfwWindowShouldClose(window) == 0) {
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glClearColor(0.2, 0.3, 0.3, 1.0);
-        glClear(GL_COLOR_BUFFER_BIT);
+        renderer.clear(video.rgb(51, 77, 77));
 
-        renderer.clearConsole(console);
-        renderer.drawCells(console, .{ 0.0, 0.0 }, cells);
-        renderer.replaceFg(console, .{ 0.0, 1.0 }, fg_replacements);
-        renderer.replaceBg(console, .{ 0.0, 0.0 }, bg_replacements);
+        {
+            console.bind();
+            defer console.unbind();
+            renderer.clear(video.rgb(255, 0, 255));
+
+            renderer.drawCells(cells);
+            renderer.replaceFg(fg_replacements);
+            renderer.replaceBg(bg_replacements);
+        }
+
         renderer.blitConsole(console, .{ 64, 64 });
 
         glfwSwapBuffers(window);

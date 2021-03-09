@@ -5,8 +5,10 @@ layout (location = 2) in int a_CodePoint;
 layout (location = 3) in int a_FontId;
 
 // TODO Use a homogenous matrix for this transform
-uniform vec2 u_CellScale;
-uniform vec2 u_Offset;
+layout (std140) uniform Console {
+    vec2 u_CellScale;
+    vec2 u_Offset;
+};
 uniform int u_Stride;
 
 const vec2 c_Pos[4] = vec2[4](

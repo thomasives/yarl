@@ -2,8 +2,10 @@
 layout (location = 0) in vec2 a_CellOffset;
 layout (location = 1) in vec3 a_Color;
 
-uniform vec2 u_CellScale;
-uniform vec2 u_Offset;
+layout (std140) uniform Console {
+    vec2 u_CellScale;
+    vec2 u_Offset;
+};
 
 const vec2 c_Pos[4] = vec2[4](
     vec2(0.0f, 0.0f),
